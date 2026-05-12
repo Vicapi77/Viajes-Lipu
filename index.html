@@ -62,6 +62,12 @@
   .operator-ranking .rank{color:#5de89a;font-weight:800;font-size:1rem;min-width:24px}
   .top-badge{display:inline-block;background:#6b2000;color:#ffcc80;border-radius:4px;padding:1px 6px;font-size:0.65rem;font-weight:700;margin-left:4px}
 
+
+  .top10-toggle{display:flex;gap:6px;margin-left:auto}
+  .top10-tab{background:#0a2e1a;border:1px solid #1e5c30;color:#4a7a58;border-radius:6px;
+    padding:4px 12px;font-size:0.68rem;font-weight:600;cursor:pointer;transition:all 0.15s;font-family:inherit}
+  .top10-tab.active{background:#1a5c32;border-color:#2a7a45;color:#5de89a}
+  .top10-tab:hover:not(.active){border-color:#2a7a45;color:#a8d4b8}
   .top10-section{padding:10px 28px 16px}
   .top10-title{font-size:0.85rem;font-weight:700;color:#5de89a;letter-spacing:0.5px;text-transform:uppercase;margin-bottom:12px;display:flex;align-items:center;gap:8px}
   .top10-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:10px}
@@ -208,7 +214,14 @@
 
 
 <div class="top10-section">
-  <div class="top10-title">🏆 Top 10 Operadores con más retrasos <span class="badge" id="top10Subtitle" style="background:#1a5c32;font-size:0.68rem;padding:2px 10px;border-radius:12px;font-weight:500"></span></div>
+  <div class="top10-title">
+    <span id="top10TitleText">🏆 Top 10 · Más retrasos</span>
+    <span class="badge" id="top10Subtitle" style="background:#1a5c32;font-size:0.68rem;padding:2px 10px;border-radius:12px;font-weight:500"></span>
+    <div class="top10-toggle">
+      <button class="top10-tab active" id="tabRetrasos" onclick="setTop10Mode('retrasos')">⏰ Más retrasos</button>
+      <button class="top10-tab" id="tabScore" onclick="setTop10Mode('score')">⭐ Peor score</button>
+    </div>
+  </div>
   <div class="top10-grid" id="top10Grid"></div>
 </div>
 <div class="tab-row">
@@ -852,6 +865,82 @@ function updateFilterInfo(){
 }
 
 
+let top10Mode = 'retrasos';
+
+function setTop10Mode(mode){
+  top10Mode = mode;
+  document.getElementById('tabRetrasos').classList.toggle('active', mode==='retrasos');
+  document.getElementById('tabScore').classList.toggle('active', mode==='score');
+  const filtered = getFiltered();
+  const late = filtered.filter(r=>r.late_start||r.late_end);
+  if(mode==='retrasos'){
+    document.getElementById('top10TitleText').textContent = '🏆 Top 10 · Más retrasos';
+    updateTop10(late);
+  } else {
+    document.getElementById('top10TitleText').textContent = '⭐ Top 10 · Peor score';
+    updateTop10Score(filtered);
+  }
+}
+
+function updateTop10Score(filtered){
+  // Get unique operators in current filter
+  const ops = [...new Set(filtered.map(r=>r.operador).filter(Boolean))];
+  // Get date range from filtered
+  const dates = [...new Set(filtered.map(r=>r.date))];
+
+  const arr = ops.map(op=>{
+    const rows = scoreData.filter(r=>r.operador===op && (dates.length===0||dates.includes(r.date)));
+    if(!rows.length) return null;
+    const avg = rows.reduce((s,r)=>s+r.score,0)/rows.length;
+    const groups = new Set(filtered.filter(r=>r.operador===op).map(r=>r.group||'?'));
+    const rutas  = new Set(filtered.filter(r=>r.operador===op&&r.ruta).map(r=>r.ruta));
+    return {op, avg:Math.round(avg*10)/10, groups, rutas, count:rows.length};
+  }).filter(Boolean).sort((a,b)=>a.avg-b.avg).slice(0,10);
+
+  const subtitle = document.getElementById('top10Subtitle');
+  const grid = document.getElementById('top10Grid');
+
+  subtitle.textContent = arr.length>0?`${arr.length} operadores con score`:'Sin datos de score';
+
+  if(!arr.length){
+    grid.innerHTML='<div style="color:#4a7a58;font-size:0.82rem;padding:16px">Sin datos de score para los filtros actuales</div>';
+    return;
+  }
+
+  const maxScore = 100;
+  const medals = ['🥇','🥈','🥉'];
+
+  grid.innerHTML = arr.map((r,i)=>{
+    const sc = scoreColor(r.avg);
+    const pct = Math.round(r.avg);
+    const groups = [...r.groups].join(', ');
+    const rutasStr = (()=>{const rr=[...r.rutas].sort((a,b)=>a.localeCompare(b,undefined,{numeric:true}));return rr.slice(0,6).join(' · ')+(rr.length>6?' +'+(rr.length-6)+' más':'');})();
+    const medal = i<3?`<div class="top10-medal">${medals[i]}</div>`:`<div class="top10-rank">${i+1}</div>`;
+    const currentDates=[...new Set(filtered.map(x=>x.date))];
+    const avgScore = getAvgScore(r.op, currentDates);
+    const scoreHtml = avgScore!==null
+      ? `<span style="font-size:0.68rem;font-weight:700;color:${sc};background:rgba(0,0,0,0.25);border-radius:4px;padding:1px 6px">⭐ Score: ${avgScore}</span>`
+      : `<span style="font-size:0.65rem;color:#4a7a58">Sin score</span>`;
+    return `<div class="top10-card" data-op="${r.op.replace(/"/g,'&quot;')}" onclick="openOperatorModal(this.dataset.op)">
+      ${medal}
+      <div class="top10-info">
+        <div class="top10-name" title="${r.op}">${r.op}</div>
+        <div class="top10-group">${groups}</div>
+        <div style="font-size:0.62rem;color:#5de89a;margin-bottom:3px">${rutasStr}</div>
+        <div class="top10-score">${scoreHtml}</div>
+        <div class="top10-bars">
+          <div class="top10-bar-row">
+            <span class="top10-bar-label">Score prom.</span>
+            <div class="top10-bar-track"><div class="top10-bar-fill" style="width:${pct}%;background:${sc}"></div></div>
+            <span class="top10-bar-val" style="color:${sc}">${r.avg}</span>
+          </div>
+        </div>
+      </div>
+      <div class="top10-total" style="color:${sc}">${r.avg}</div>
+    </div>`;
+  }).join('');
+}
+
 function updateTop10(late){
   const map={};
   late.forEach(r=>{
@@ -913,7 +1002,8 @@ function applyFilters(){
   const filtered=getFiltered();
   const late=filtered.filter(r=>r.late_start||r.late_end);
   updateKPIs(filtered,late);
-  updateTop10(late);
+  if(top10Mode==='score') updateTop10Score(filtered);
+  else updateTop10(late);
   updateDetalle(late);
   updateRanking(late);
   updateGrupos(filtered);

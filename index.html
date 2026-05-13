@@ -1131,10 +1131,12 @@ document.getElementById('csvUpload').addEventListener('change',function(e){
   });
 })
 // ── Auto-carga desde GitHub ───────────────────────────────────────────────────
-const GITHUB_TOKEN  = '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';
 const GITHUB_REPO   = 'vicapi77/Viajes-Lipu';
 const GITHUB_FOLDER = 'uploads';
 const GITHUB_API    = 'https://api.github.com';
+const TOKEN_KEY     = 'gh_token_lipu';
+
+function getToken(){ return localStorage.getItem(TOKEN_KEY) || ''; }
 
 function setAutoStatus(msg, color='#7ab8ff'){
   const el = document.getElementById('autoLoadStatus');
@@ -1142,26 +1144,36 @@ function setAutoStatus(msg, color='#7ab8ff'){
 }
 
 async function autoLoadFromGitHub(){
+  let token = getToken();
+  if(!token){
+    token = window.prompt('Ingresa tu GitHub Personal Access Token (se guarda solo en este navegador):','');
+    if(!token || !token.trim()){ setAutoStatus('🔑 Token requerido para cargar datos','#f5a623'); return; }
+    localStorage.setItem(TOKEN_KEY, token.trim());
+    token = token.trim();
+  }
   const btn = document.getElementById('btnAutoLoad');
-  btn.disabled = true;
+  if(btn) btn.disabled = true;
   setAutoStatus('🔍 Buscando archivos en GitHub…');
   try {
     // 1. Listar archivos CSV en uploads/
     const listRes = await fetch(`${GITHUB_API}/repos/${GITHUB_REPO}/contents/${GITHUB_FOLDER}`, {
-      headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json' }
+      headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
-    if(!listRes.ok){ setAutoStatus('⚠️ No se pudo acceder al repo','#e05555'); btn.disabled=false; return; }
+    if(listRes.status === 401 || listRes.status === 403){
+      localStorage.removeItem(TOKEN_KEY);
+      setAutoStatus('🔑 Token inválido — clic en "🤖 Cargar" para ingresar uno nuevo','#e05555');
+      if(btn) btn.disabled = false; return;
+    }
+    if(!listRes.ok){ setAutoStatus('⚠️ No se pudo acceder al repo','#e05555'); if(btn) btn.disabled=false; return; }
     const files = await listRes.json();
-    const csvFiles = files.filter(f => f.name.endsWith('.csv'));
-    if(!csvFiles.length){ setAutoStatus('📭 Sin archivos CSV pendientes','#a8d4b8'); btn.disabled=false; return; }
+    const csvFiles = Array.isArray(files) ? files.filter(f => f.name.endsWith('.csv')) : [];
+    if(!csvFiles.length){ setAutoStatus('📭 Sin archivos CSV pendientes','#a8d4b8'); if(btn) btn.disabled=false; return; }
     setAutoStatus(`📥 ${csvFiles.length} archivo(s) encontrado(s) — descargando…`);
     let totalRows = 0;
     for(const file of csvFiles){
-      // 2. Descargar contenido
       const fileRes = await fetch(file.download_url);
       if(!fileRes.ok){ setAutoStatus(`⚠️ Error descargando ${file.name}`,'#e05555'); continue; }
       const csvText = await fileRes.text();
-      // 3. Procesar igual que el input manual
       const rows = parseCsvText(csvText).map(processRawRow);
       if(rows.length){
         extraData = [...extraData, ...rows];
@@ -1172,11 +1184,10 @@ async function autoLoadFromGitHub(){
         };
         trySave(5);
       }
-      // 4. Borrar archivo de GitHub tras procesar
       setAutoStatus(`🗑️ Borrando ${file.name} de GitHub…`);
       await fetch(`${GITHUB_API}/repos/${GITHUB_REPO}/contents/${file.path}`, {
         method: 'DELETE',
-        headers: { 'Authorization': `token ${GITHUB_TOKEN}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
+        headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json', 'Content-Type': 'application/json' },
         body: JSON.stringify({ message: `Auto-borrado tras carga: ${file.name}`, sha: file.sha })
       });
     }
@@ -1192,10 +1203,10 @@ async function autoLoadFromGitHub(){
     setAutoStatus('⚠️ Error: ' + e.message, '#e05555');
     console.error('autoLoadFromGitHub:', e);
   }
-  btn.disabled = false;
+  if(btn) btn.disabled = false;
 }
 
-// Al abrir el dashboard, cargar automáticamente si hay archivos pendientes
+// Al abrir, carga automáticamente si ya hay token guardado
 window.addEventListener('load', () => {
   setTimeout(() => autoLoadFromGitHub(), 3000);
 });

@@ -1174,7 +1174,20 @@ async function autoLoadFromGitHub(){
       const fileRes = await fetch(file.download_url);
       if(!fileRes.ok){ setAutoStatus(`⚠️ Error descargando ${file.name}`,'#e05555'); continue; }
       const csvText = await fileRes.text();
-      const rows = parseCsvText(csvText).map(processRawRow);
+      // Soportar tanto JSON (bustrax) como CSV tradicional
+      let rows = [];
+      try {
+        const parsed = JSON.parse(csvText);
+        if(Array.isArray(parsed)){
+          rows = parsed
+            .filter(r => (r.shift||'').toUpperCase()==='IN' && !(r.group||'').toLowerCase().includes('especiales'))
+            .map(processRawRow); // viene de bustrax como JSON
+        } else {
+          rows = parseCsvText(csvText).map(processRawRow);
+        }
+      } catch(e) {
+        rows = parseCsvText(csvText).map(processRawRow);
+      }
       if(rows.length){
         extraData = [...extraData, ...rows];
         totalRows += rows.length;

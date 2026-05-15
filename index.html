@@ -124,6 +124,9 @@
   .lightbox-info{text-align:center}
   .lightbox-close{position:absolute;top:20px;right:24px;background:none;border:none;
     color:#fff;font-size:1.6rem;cursor:pointer}
+  /* Events charts in modal */
+  .modal-events-box{background:#0a2e1a;border:1px solid #1e5c30;border-radius:10px;padding:16px;position:relative;height:220px;margin-top:14px}
+  .modal-section-label{font-size:0.72rem;font-weight:700;color:#7ab8ff;text-transform:uppercase;letter-spacing:0.5px;margin:16px 0 6px}
   /* Modal tendencia operador */
   .modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:1000;display:flex;align-items:center;justify-content:center;padding:16px}
   .modal-box{background:#0d3d20;border:1px solid #2a7a45;border-radius:14px;width:100%;max-width:760px;max-height:90vh;overflow-y:auto;padding:24px;position:relative}
@@ -137,7 +140,7 @@
   .modal-stat .msl{font-size:0.65rem;color:#a8d4b8;text-transform:uppercase;letter-spacing:0.4px;margin-top:2px}
   .modal-stat.warn .msv{color:#f5a623}
   .modal-stat.danger .msv{color:#e05555}
-  .modal-chart-box{background:#0a2e1a;border:1px solid #1e5c30;border-radius:10px;padding:16px;position:relative;height:280px}
+  .modal-chart-box{background:#0a2e1a;border:1px solid #1e5c30;border-radius:10px;padding:16px;position:relative;height:300px}
   .top10-card{cursor:pointer}
   @media(max-width:700px){.charts-row{grid-template-columns:1fr}.kpi-row{grid-template-columns:repeat(2,1fr)}.header h1{font-size:1.1rem}}
   .filter-info{font-size:0.72rem;color:#5de89a;padding:4px 28px 0;font-style:italic}
@@ -167,9 +170,15 @@
   <input type="file" id="scoreUpload" accept=".xlsx,.csv" style="background:#3a2a00;border-color:#7a5a00">
   <span class="file-count" id="scoreCountLabel" style="color:#f5a623"></span>
   <button class="btn" onclick="clearScoreData()" style="padding:4px 10px;font-size:0.72rem;background:#3a2a00;border-color:#7a5a00;color:#f5a623">Limpiar score</button>
+  <div style="width:1px;height:24px;background:#2a7a45;margin:0 4px"></div>
+  <label style="color:#7ab8ff">Eventos seguridad:</label>
+  <input type="file" id="eventsUpload" accept=".csv" style="background:#0a1a3a;border-color:#2a4a8a;color:#7ab8ff">
+  <span class="file-count" id="eventsCountLabel" style="color:#7ab8ff"></span>
+  <button class="btn" onclick="clearEventsData()" style="padding:4px 10px;font-size:0.72rem;background:#0a1a3a;border-color:#2a4a8a;color:#7ab8ff">Limpiar eventos</button>
   <div style="margin-left:auto;display:flex;flex-direction:column;gap:3px;align-items:flex-end">
     <span id="fbStatusViajes" style="font-size:0.72rem;font-weight:600;color:#a8d4b8">🚌 Viajes: conectando…</span>
     <span id="fbStatusScore" style="font-size:0.72rem;font-weight:600;color:#a8d4b8">⭐ Score: conectando…</span>
+    <span id="fbStatusEvents" style="font-size:0.72rem;font-weight:600;color:#7ab8ff">🔵 Eventos: —</span>
   </div>
 </div>
 
@@ -390,6 +399,46 @@ window.__loadActas  = loadActas;
 window.__uploadActa = uploadActa;
 window.__deleteActa = deleteActa;
 
+// ── Events Firestore ──────────────────────────────────────────────────────────
+async function saveEvents(rows){
+  if(!rows.length) return;
+  const setE = msg => {
+    const el=document.getElementById('fbStatusEvents');
+    if(el){el.textContent=msg;el.style.color='#7ab8ff';}
+  };
+  try {
+    setE('⏳ Guardando eventos…');
+    await batchWrite('eventos', rows,
+      r => `${r.employeeId}_${r.date}_${r.eventName}_${Math.random().toString(36).slice(2,7)}`,
+      setE
+    );
+    setE(`✅ ${rows.length} eventos guardados`);
+  } catch(e){ setE('⚠️ '+e.message); }
+}
+
+async function loadEvents(){
+  const setE = msg => {
+    const el=document.getElementById('fbStatusEvents');
+    if(el){el.textContent=msg;el.style.color='#7ab8ff';}
+  };
+  setE('🔵 Eventos: cargando…');
+  try {
+    const snap = await getDocs(collection(db,'eventos'));
+    const rows = [];
+    snap.forEach(d => rows.push(d.data()));
+    if(rows.length){
+      setE(`✅ ${rows.length} eventos cargados`);
+      if(window.__setEventsData) window.__setEventsData(rows);
+      else window.__pendingEventsData = rows;
+    } else {
+      setE('🔵 Sin eventos — sube el CSV');
+    }
+  } catch(e){ setE('⚠️ '+e.message); }
+}
+
+window.__saveEventsToFirestore = saveEvents;
+loadEvents();
+
 // ── Status helpers ────────────────────────────────────────────────────────────
 function setV(msg, color='#5de89a'){
   const el=document.getElementById('fbStatusViajes');
@@ -507,6 +556,7 @@ Promise.all([loadViajes(), loadScores()]);
 <script>
 let baseData = [];
 let extraData = [];
+let eventsData = []; // Drivers events - Medium & High only
 let chartStart, chartEnd;
 let scoreData = []; // {operador, planta, date, score}
 
@@ -681,7 +731,34 @@ function getLate(){
   return all.filter(r=>r.late_start||r.late_end);
 }
 
-function updateKPIs(filtered,late){
+function getFilteredEvents(){
+  const date  = document.getElementById('filterDate').value;
+  const week  = document.getElementById('filterWeek').value;
+  const month = document.getElementById('filterMonth').value;
+  const group = document.getElementById('filterGroup').value;
+  let data = eventsData;
+  if(date)  data = data.filter(e => e.date === date);
+  if(week)  data = data.filter(e => getISOWeek(e.date) === week);
+  if(month) data = data.filter(e => getMonthLabel(e.date) === month);
+  // group filter: match via driverName against filtered viajes operators in that group
+  if(group){
+    const opsInGroup = new Set(
+      getFiltered().filter(r=>r.group===group).map(r=>(r.operador||'').toUpperCase().trim())
+    );
+    data = data.filter(e => opsInGroup.has((e.driverName||'').toUpperCase().trim()));
+  }
+  return data;
+}
+
+function updateKPIs(filtered, late){
+  if(top10Mode === 'score'){
+    updateKPIsScore(filtered);
+  } else {
+    updateKPIsRetrasos(filtered, late);
+  }
+}
+
+function updateKPIsRetrasos(filtered, late){
   const total=filtered.length;
   const ls=late.filter(r=>r.late_start).length;
   const le=late.filter(r=>r.late_end).length;
@@ -695,6 +772,59 @@ function updateKPIs(filtered,late){
     <div class="kpi danger"><div class="kpi-val">${both}</div><div class="kpi-lbl">Ambos tardíos</div></div>
     <div class="kpi warn"><div class="kpi-val">${pctS}%</div><div class="kpi-lbl">% Inicio tarde</div></div>
     <div class="kpi danger"><div class="kpi-val">${pctE}%</div><div class="kpi-lbl">% Llegada tarde</div></div>
+  `;
+}
+
+function updateKPIsScore(filtered){
+  const ops = [...new Set(filtered.map(r=>r.operador).filter(Boolean))];
+  const dates = [...new Set(filtered.map(r=>r.date))];
+
+  // Score metrics
+  const scoreRows = scoreData.filter(r =>
+    ops.includes(r.operador) && (dates.length===0 || dates.includes(r.date))
+  );
+  const opsWithScore = [...new Set(scoreRows.map(r=>r.operador))].length;
+  const scores = scoreRows.map(r=>r.score);
+  const avgScore = scores.length ? (scores.reduce((a,b)=>a+b,0)/scores.length) : null;
+  const minScore = scores.length ? Math.min(...scores) : null;
+  const below80  = scores.filter(s=>s<80).length;
+  const pctBelow = scores.length ? ((below80/scores.length)*100).toFixed(1) : 0;
+
+  // Events metrics (filtered)
+  const evFiltered = getFilteredEvents();
+  const totalEv  = evFiltered.length;
+  const highEv   = evFiltered.filter(e=>e.severity==='High').length;
+  const medEv    = evFiltered.filter(e=>e.severity==='Medium').length;
+  const pctHigh  = totalEv>0 ? ((highEv/totalEv)*100).toFixed(1) : 0;
+
+  const scoreColor = v => v===null?'#a8d4b8':v>=90?'#5de89a':v>=75?'#f5a623':'#e05555';
+  const scoreClass = v => v===null?'':v>=90?'':v>=75?'warn':'danger';
+
+  document.getElementById('kpiRow').innerHTML=`
+    <div class="kpi ${scoreClass(avgScore)}" style="border-color:${avgScore!==null?scoreColor(avgScore):'#2a7a45'}">
+      <div class="kpi-val" style="color:${avgScore!==null?scoreColor(avgScore):'#a8d4b8'}">${avgScore!==null?avgScore.toFixed(1)+'%':'—'}</div>
+      <div class="kpi-lbl">Score promedio</div>
+    </div>
+    <div class="kpi ${scoreClass(minScore)}" style="border-color:${minScore!==null?scoreColor(minScore):'#2a7a45'}">
+      <div class="kpi-val" style="color:${minScore!==null?scoreColor(minScore):'#a8d4b8'}">${minScore!==null?minScore.toFixed(1)+'%':'—'}</div>
+      <div class="kpi-lbl">Peor score</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-val">${opsWithScore}</div>
+      <div class="kpi-lbl">Operadores con score</div>
+    </div>
+    <div class="kpi ${parseFloat(pctBelow)>30?'danger':parseFloat(pctBelow)>15?'warn':''}">
+      <div class="kpi-val">${below80}</div>
+      <div class="kpi-lbl">Registros bajo 80%</div>
+    </div>
+    <div class="kpi ${totalEv>0?'warn':''}">
+      <div class="kpi-val" style="color:#f5a623">${medEv.toLocaleString()}</div>
+      <div class="kpi-lbl">Eventos Medio</div>
+    </div>
+    <div class="kpi ${highEv>0?'danger':''}">
+      <div class="kpi-val" style="color:#e05555">${highEv.toLocaleString()}</div>
+      <div class="kpi-lbl">Eventos Alto · ${pctHigh}%</div>
+    </div>
   `;
 }
 
@@ -879,9 +1009,11 @@ function setTop10Mode(mode){
   if(mode==='retrasos'){
     document.getElementById('top10TitleText').textContent = '🏆 Top 10 · Más retrasos';
     updateTop10(late);
+    updateKPIsRetrasos(filtered, late);
   } else {
     document.getElementById('top10TitleText').textContent = '⭐ Top 10 · Peor score';
     updateTop10Score(filtered);
+    updateKPIsScore(filtered);
   }
 }
 
@@ -1130,6 +1262,69 @@ document.getElementById('csvUpload').addEventListener('change',function(e){
     reader.readAsText(f,'latin1');
   });
 })
+// ── Events CSV parser ────────────────────────────────────────────────────────
+function parseEventsCSV(text){
+  const lines = text.split('\n').filter(l => l.trim());
+  if(lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim().replace(/^\uFEFF/, '').replace(/^"|"$/g,''));
+  const rows = [];
+  for(let i = 1; i < lines.length; i++){
+    const vals = [];
+    let cur = '', inQ = false;
+    for(let c of lines[i]){
+      if(c==='"'){inQ=!inQ}
+      else if(c===','&&!inQ){vals.push(cur);cur='';}
+      else cur+=c;
+    }
+    vals.push(cur);
+    const obj = {};
+    headers.forEach((h,idx) => { obj[h] = (vals[idx]||'').trim().replace(/^"|"$/g,''); });
+
+    // Only Medium and High
+    const sev = (obj['Event Severity']||'').trim();
+    if(sev !== 'Medium' && sev !== 'High') continue;
+
+    // Parse date from "08/05/2026 06:49:32 AM" → "2026-05-08"
+    const rawDate = obj['Start Time'] || '';
+    let date = '';
+    const dm = rawDate.match(/(\d{2})\/(\d{2})\/(\d{4})/);
+    if(dm) date = `${dm[3]}-${dm[2]}-${dm[1]}`;
+
+    rows.push({
+      employeeId: obj['Employee ID'] || '',
+      driverName: obj['Driver Name'] || '',
+      date,
+      severity: sev,
+      subcategory: (obj['Event Subcategory'] || '').trim(),
+      eventName: obj['Event Name'] || ''
+    });
+  }
+  return rows;
+}
+
+document.getElementById('eventsUpload').addEventListener('change', async function(e){
+  const files = [...e.target.files];
+  if(!files.length) return;
+  let pending = files.length;
+  const newRows = [];
+  files.forEach(f => {
+    const reader = new FileReader();
+    reader.onload = ev => {
+      const rows = parseEventsCSV(ev.target.result);
+      newRows.push(...rows);
+      pending--;
+      if(pending === 0){
+        eventsData = [...eventsData, ...newRows];
+        document.getElementById('eventsCountLabel').textContent = `+${eventsData.length} eventos cargados`;
+        applyFilters();
+        // Save Medium+High to Firebase
+        if(window.__saveEventsToFirestore) window.__saveEventsToFirestore(eventsData);
+      }
+    };
+    reader.readAsText(f, 'utf-8');
+  });
+});
+
 // ── Auto-carga desde GitHub ───────────────────────────────────────────────────
 const GITHUB_REPO   = 'vicapi77/Viajes-Lipu';
 const GITHUB_FOLDER = 'uploads';
@@ -1155,7 +1350,6 @@ async function autoLoadFromGitHub(){
   if(btn) btn.disabled = true;
   setAutoStatus('🔍 Buscando archivos en GitHub…');
   try {
-    // 1. Listar archivos CSV en uploads/
     const listRes = await fetch(`${GITHUB_API}/repos/${GITHUB_REPO}/contents/${GITHUB_FOLDER}`, {
       headers: { 'Authorization': `token ${token}`, 'Accept': 'application/vnd.github.v3+json' }
     });
@@ -1174,20 +1368,15 @@ async function autoLoadFromGitHub(){
       const fileRes = await fetch(file.download_url);
       if(!fileRes.ok){ setAutoStatus(`⚠️ Error descargando ${file.name}`,'#e05555'); continue; }
       const csvText = await fileRes.text();
-      // Soportar tanto JSON (bustrax) como CSV tradicional
       let rows = [];
       try {
         const parsed = JSON.parse(csvText);
         if(Array.isArray(parsed)){
           rows = parsed
             .filter(r => (r.shift||'').toUpperCase()==='IN' && !(r.group||'').toLowerCase().includes('especiales'))
-            .map(processRawRow); // viene de bustrax como JSON
-        } else {
-          rows = parseCsvText(csvText).map(processRawRow);
-        }
-      } catch(e) {
-        rows = parseCsvText(csvText).map(processRawRow);
-      }
+            .map(processRawRow);
+        } else { rows = parseCsvText(csvText).map(processRawRow); }
+      } catch(e) { rows = parseCsvText(csvText).map(processRawRow); }
       if(rows.length){
         extraData = [...extraData, ...rows];
         totalRows += rows.length;
@@ -1214,12 +1403,10 @@ async function autoLoadFromGitHub(){
     }
   } catch(e) {
     setAutoStatus('⚠️ Error: ' + e.message, '#e05555');
-    console.error('autoLoadFromGitHub:', e);
   }
   if(btn) btn.disabled = false;
 }
 
-// Al abrir, carga automáticamente si ya hay token guardado
 window.addEventListener('load', () => {
   setTimeout(() => autoLoadFromGitHub(), 3000);
 });
@@ -1255,6 +1442,12 @@ document.getElementById('scoreUpload').addEventListener('change', async function
   }
 });
 ;
+
+function clearEventsData(){
+  eventsData = [];
+  document.getElementById('eventsCountLabel').textContent = '';
+  applyFilters();
+}
 
 function clearExtraData(){
   extraData=[];
@@ -1309,10 +1502,21 @@ window.__mergeScoreFromFirebase = function(rows) {
     mergeScoreData(window.__pendingScoreData);
     window.__pendingScoreData=null;
   }
+  if(window.__pendingEventsData && window.__pendingEventsData.length){
+    eventsData = window.__pendingEventsData;
+    window.__pendingEventsData = null;
+    document.getElementById('eventsCountLabel').textContent = `+${eventsData.length} eventos`;
+  }
+  window.__setEventsData = rows => {
+    eventsData = rows;
+    document.getElementById('eventsCountLabel').textContent = `+${eventsData.length} eventos`;
+  };
 })();
 
 let modalChart = null;
 let modalScoreChart = null;
+let modalEventsSevChart = null;
+let modalEventsSubChart = null;
 
 function openOperatorModal(operadorName) {
   const filtered = getFiltered();
@@ -1424,60 +1628,117 @@ function openOperatorModal(operadorName) {
     }
   });
 
-  // ── Score trend chart ───────────────────────────────────────────────────────
+  // ── Score + Events combined chart ───────────────────────────────────────────
   if (modalScoreChart) { modalScoreChart.destroy(); modalScoreChart = null; }
+  if (modalEventsSevChart) { modalEventsSevChart.destroy(); modalEventsSevChart = null; }
+  if (modalEventsSubChart) { modalEventsSubChart.destroy(); modalEventsSubChart = null; }
 
-  // Get score rows for this operator, filtered to same date range
+  // Score data
   const filteredDates = [...new Set(filtered.map(r=>r.date))].sort();
   const scoreRows = scoreData
     .filter(r=>r.operador===operadorName)
     .filter(r=>filteredDates.length===0 || filteredDates.some(d=>r.date>=filteredDates[0]&&r.date<=filteredDates[filteredDates.length-1]))
     .sort((a,b)=>a.date.localeCompare(b.date));
 
+  // Events data — use globally filtered events, then match by operator name
+  const opEvents = getFilteredEvents().filter(e => {
+    const eName = (e.driverName||'').toUpperCase().trim();
+    const opName = (operadorName||'').toUpperCase().trim();
+    return eName === opName || opName.includes(eName) || eName.includes(opName);
+  });
+
+  // Group events by date
+  const evByDate = {};
+  opEvents.forEach(e => {
+    if(!evByDate[e.date]) evByDate[e.date] = {Medium:0, High:0};
+    evByDate[e.date][e.severity] = (evByDate[e.date][e.severity]||0) + 1;
+  });
+
   const scoreBox = document.getElementById('scoreChartBox');
   const scoreNoData = document.getElementById('scoreNoData');
+  const hasScore = scoreRows.length > 0;
+  const hasEvents = opEvents.length > 0;
 
-  if (!scoreRows.length) {
+  if (!hasScore && !hasEvents) {
     scoreBox.style.display='none';
     scoreNoData.style.display='block';
   } else {
     scoreBox.style.display='block';
     scoreNoData.style.display='none';
-    // Build full date range for score (all days with score data)
+
+    // Build unified date axis from score + events
     const scoreDates = [...new Set(scoreRows.map(r=>r.date))].sort();
-    const scoreValues = scoreDates.map(d=>{
+    const evDates = Object.keys(evByDate);
+    const allCombinedDates = [...new Set([...scoreDates, ...evDates, ...dates])].sort();
+
+    const scoreValues = allCombinedDates.map(d => {
       const row = scoreRows.find(r=>r.date===d);
       return row ? row.score : null;
     });
-    const avgS = scoreValues.filter(v=>v!==null).reduce((a,b)=>a+b,0)/scoreValues.filter(v=>v!==null).length;
+    const validScores = scoreValues.filter(v=>v!==null);
+    const avgS = validScores.length ? validScores.reduce((a,b)=>a+b,0)/validScores.length : null;
+
+    const datasets = [];
+
+    // Bars: Medium events (y2 axis — right)
+    if(hasEvents){
+      datasets.push({
+        type: 'bar',
+        label: 'Eventos Medio',
+        data: allCombinedDates.map(d => (evByDate[d]||{}).Medium || 0),
+        backgroundColor: 'rgba(245,166,35,0.7)',
+        borderRadius: 3,
+        yAxisID: 'yEv',
+        order: 3,
+        stack: 'ev'
+      });
+      datasets.push({
+        type: 'bar',
+        label: 'Eventos Alto',
+        data: allCombinedDates.map(d => (evByDate[d]||{}).High || 0),
+        backgroundColor: 'rgba(224,85,85,0.8)',
+        borderRadius: 3,
+        yAxisID: 'yEv',
+        order: 2,
+        stack: 'ev'
+      });
+    }
+
+    // Line: Score (y axis — left)
+    if(hasScore){
+      datasets.push({
+        type: 'line',
+        label: 'Score diario',
+        data: scoreValues,
+        borderColor: '#f5a623',
+        backgroundColor: 'rgba(245,166,35,0.12)',
+        pointBackgroundColor: scoreValues.map(v=>v===null?'transparent':scoreColor(v)),
+        pointRadius: 5,
+        pointHoverRadius: 7,
+        tension: 0.3,
+        spanGaps: false,
+        yAxisID: 'yScore',
+        order: 1
+      });
+      if(avgS !== null){
+        datasets.push({
+          type: 'line',
+          label: `Promedio score (${Math.round(avgS*10)/10})`,
+          data: allCombinedDates.map(()=>Math.round(avgS*10)/10),
+          borderColor: scoreColor(avgS),
+          borderDash: [6,3],
+          borderWidth: 1.5,
+          pointRadius: 0,
+          tension: 0,
+          yAxisID: 'yScore',
+          order: 0
+        });
+      }
+    }
+
     const ctx2 = document.getElementById('modalScoreChart').getContext('2d');
     modalScoreChart = new Chart(ctx2, {
-      type: 'line',
-      data: {
-        labels: scoreDates,
-        datasets: [
-          {
-            label: 'Score diario',
-            data: scoreValues,
-            borderColor: '#f5a623',
-            backgroundColor: 'rgba(245,166,35,0.15)',
-            pointBackgroundColor: scoreValues.map(v=>v===null?'transparent':scoreColor(v)),
-            pointRadius: 5,
-            pointHoverRadius: 7,
-            tension: 0.3,
-            spanGaps: false
-          },
-          {
-            label: `Promedio (${Math.round(avgS*10)/10})`,
-            data: scoreDates.map(()=>Math.round(avgS*10)/10),
-            borderColor: scoreColor(avgS),
-            borderDash: [6,3],
-            borderWidth: 1.5,
-            pointRadius: 0,
-            tension: 0
-          }
-        ]
-      },
+      data: { labels: allCombinedDates, datasets },
       options: {
         responsive: true,
         maintainAspectRatio: false,
@@ -1487,22 +1748,92 @@ function openOperatorModal(operadorName) {
           tooltip: {
             backgroundColor:'#0a2e1a', borderColor:'#2a7a45', borderWidth:1,
             callbacks: {
-              label: ctx => ctx.dataset.label + ': ' + (ctx.raw!==null?ctx.raw.toFixed(1):'sin dato')
+              label: ctx => {
+                if(ctx.raw===null||ctx.raw===undefined) return null;
+                const isScore = ctx.dataset.yAxisID==='yScore';
+                return ctx.dataset.label + ': ' + (isScore ? ctx.raw.toFixed(1)+'%' : ctx.raw);
+              }
             }
           }
         },
         scales: {
-          x: { ticks:{color:'#d8f0e4',font:{size:10}}, grid:{color:'rgba(90,170,110,0.1)'} },
-          y: {
+          x: { ticks:{color:'#d8f0e4',font:{size:10}}, grid:{color:'rgba(90,170,110,0.1)'}, stacked:true },
+          yScore: {
+            position: 'left',
             min: 0, max: 100,
-            ticks: { color:'#a8d4b8', font:{size:10}, callback: v=>v+'%' },
-            grid: { color:'rgba(90,170,110,0.1)' },
-            title: { display:true, text:'Score', color:'#a8d4b8', font:{size:10} }
+            ticks: { color:'#f5a623', font:{size:10}, callback: v=>v+'%' },
+            grid: { color:'rgba(90,170,110,0.08)' },
+            title: { display:true, text:'Score', color:'#f5a623', font:{size:10} }
+          },
+          yEv: {
+            position: 'right',
+            min: 0,
+            ticks: { color:'#a8d4b8', font:{size:10} },
+            grid: { display:false },
+            title: { display:true, text:'Eventos', color:'#a8d4b8', font:{size:10} },
+            stacked: true
           }
         }
       }
     });
   }
+
+  // ── Events subcategory chart ─────────────────────────────────────────────────
+  if(modalEventsSubChart){ modalEventsSubChart.destroy(); modalEventsSubChart = null; }
+
+  // Build evDates here in outer scope (independent of combined chart)
+  const allEvDates = [...new Set([...dates, ...Object.keys(evByDate)])].sort();
+
+  const subcats = [...new Set(opEvents.map(e => e.subcategory))].sort();
+  const subColors = { 'Speed':'#e05555', 'Turns':'#f5a623', 'Acceleration':'#7ab8ff', 'Deceleration':'#5de89a' };
+  const defaultColors = ['#a78bfa','#fb923c','#34d399','#60a5fa','#f472b6'];
+  const subLabels = {
+    'Speed':        'Velocidad',
+    'Turns':        'Giros',
+    'Acceleration': 'Aceleración',
+    'Deceleration': 'Desaceleración',
+    'Distraction':  'Distracción',
+    'Fatigue':      'Fatiga',
+    'Tailgating':   'Seguimiento cercano',
+    'Braking':      'Frenado',
+    'Lane Change':  'Cambio de carril',
+    'Seatbelt':     'Cinturón'
+  };
+
+  const evSubByDate = {};
+  opEvents.forEach(e => {
+    if(!evSubByDate[e.date]) evSubByDate[e.date] = {};
+    evSubByDate[e.date][e.subcategory] = (evSubByDate[e.date][e.subcategory]||0) + 1;
+  });
+
+  if(modalEventsSubChart){ modalEventsSubChart.destroy(); modalEventsSubChart = null; }
+  const subCtx = document.getElementById('modalEventsSubChart').getContext('2d');
+  modalEventsSubChart = new Chart(subCtx, {
+    type: 'bar',
+    data: {
+      labels: allEvDates,
+      datasets: subcats.map((sub, idx) => ({
+        label: subLabels[sub] || sub,
+        data: allEvDates.map(d => (evSubByDate[d]||{})[sub] || 0),
+        backgroundColor: subColors[sub] || defaultColors[idx % defaultColors.length],
+        borderRadius: 3,
+        stack: 'sub'
+      }))
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      interaction: { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: '#a8d4b8', font: { size: 11 } } },
+        tooltip: { backgroundColor: '#0a2e1a', borderColor: '#2a7a45', borderWidth: 1 }
+      },
+      scales: {
+        x: { ticks: { color: '#d8f0e4', font: { size: 10 } }, grid: { color: 'rgba(90,170,110,0.1)' }, stacked: true },
+        y: { ticks: { color: '#a8d4b8', font: { size: 10 } }, grid: { color: 'rgba(90,170,110,0.1)' }, stacked: true,
+             title: { display: true, text: 'Subcategoría', color: '#a8d4b8', font: { size: 10 } } }
+      }
+    }
+  });
 }
 
 
@@ -1664,11 +1995,15 @@ document.addEventListener('keydown', e => { if(e.key==='Escape') closeModal(); }
       <canvas id="modalChart"></canvas>
     </div>
     <div style="margin-top:14px">
-      <div style="font-size:0.72rem;font-weight:700;color:#f5a623;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px">📊 Tendencia de Score de Seguridad</div>
+      <div style="font-size:0.72rem;font-weight:700;color:#f5a623;text-transform:uppercase;letter-spacing:0.4px;margin-bottom:8px">📊 Tendencia de Score · Eventos (Medio y Alto) por día</div>
       <div class="modal-chart-box" id="scoreChartBox">
         <canvas id="modalScoreChart"></canvas>
       </div>
       <div id="scoreNoData" style="display:none;color:#4a7a58;font-size:0.8rem;padding:16px;text-align:center">Sin datos de score para este operador en el período seleccionado</div>
+      <div class="modal-section-label" style="margin-top:14px">📊 Tipo de evento por día</div>
+      <div class="modal-events-box">
+        <canvas id="modalEventsSubChart"></canvas>
+      </div>
     </div>
 
     <!-- Actas -->

@@ -166,6 +166,13 @@
   <button class="btn" id="btnAutoLoad" onclick="autoLoadFromGitHub()" style="padding:4px 12px;font-size:0.72rem;background:#1a3a6a;border:1px solid #2a5aaa;color:#7ab8ff">🤖 Cargar desde GitHub</button>
   <span id="autoLoadStatus" style="font-size:0.72rem;color:#7ab8ff;font-style:italic"></span>
   <div style="width:1px;height:24px;background:#2a7a45;margin:0 4px"></div>
+  <label style="color:#5de89a">📅 Ver más historial:</label>
+  <input type="date" id="rangeFrom" style="background:#1a5c32;border:1px solid #2a7a45;color:#e8f5ee;border-radius:5px;padding:4px 8px;font-size:0.75rem">
+  <span style="color:#a8d4b8;font-size:0.72rem">a</span>
+  <input type="date" id="rangeTo" style="background:#1a5c32;border:1px solid #2a7a45;color:#e8f5ee;border-radius:5px;padding:4px 8px;font-size:0.75rem">
+  <button class="btn" id="btnLoadRange" onclick="loadDateRange()" style="padding:4px 12px;font-size:0.72rem">Cargar rango</button>
+  <span id="rangeLoadStatus" style="font-size:0.72rem;color:#5de89a;font-style:italic"></span>
+  <div style="width:1px;height:24px;background:#2a7a45;margin:0 4px"></div>
   <label style="color:#f5a623">Score seguridad:</label>
   <input type="file" id="scoreUpload" accept=".xlsx,.csv" style="background:#3a2a00;border-color:#7a5a00">
   <span class="file-count" id="scoreCountLabel" style="color:#f5a623"></span>
@@ -309,6 +316,18 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);
 
+// ── Rango de fechas: por defecto solo el mes en curso ─────────────────────────
+function getCurrentMonthRange(){
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = now.getMonth();
+  const pad = n => String(n).padStart(2,'0');
+  const start = `${y}-${pad(m+1)}-01`;
+  const lastDay = new Date(y, m+1, 0).getDate();
+  const end = `${y}-${pad(m+1)}-${pad(lastDay)}`;
+  return {start, end};
+}
+
 // ── Actas — Base64 en Firestore (sin Storage) ─────────────────────────────────
 async function loadActas(operadorName){
   try {
@@ -416,14 +435,16 @@ async function saveEvents(rows){
   } catch(e){ setE('⚠️ '+e.message); }
 }
 
-async function loadEvents(){
+async function loadEvents(range){
   const setE = msg => {
     const el=document.getElementById('fbStatusEvents');
     if(el){el.textContent=msg;el.style.color='#7ab8ff';}
   };
   setE('🔵 Eventos: cargando…');
   try {
-    const snap = await getDocs(collection(db,'eventos'));
+    let q = collection(db,'eventos');
+    if(range) q = query(collection(db,'eventos'), where('date','>=',range.start), where('date','<=',range.end));
+    const snap = await getDocs(q);
     const rows = [];
     snap.forEach(d => rows.push(d.data()));
     if(rows.length){
@@ -431,13 +452,14 @@ async function loadEvents(){
       if(window.__setEventsData) window.__setEventsData(rows);
       else window.__pendingEventsData = rows;
     } else {
-      setE('🔵 Sin eventos — sube el CSV');
+      setE(range ? '🔵 Sin eventos en el rango' : '🔵 Sin eventos — sube el CSV');
     }
   } catch(e){ setE('⚠️ '+e.message); }
 }
 
 window.__saveEventsToFirestore = saveEvents;
-loadEvents();
+window.__loadEventsRange = loadEvents;
+loadEvents(getCurrentMonthRange());
 
 // ── Status helpers ────────────────────────────────────────────────────────────
 function setV(msg, color='#5de89a'){
@@ -464,10 +486,12 @@ async function batchWrite(colName, toInsert, keyFn, statusFn){
 }
 
 // ── Viajes ────────────────────────────────────────────────────────────────────
-async function loadViajes(){
+async function loadViajes(range){
   setV('🚌 Viajes: cargando…','#f5a623');
   try{
-    const snap=await getDocs(collection(db,'viajes'));
+    let q = collection(db,'viajes');
+    if(range) q = query(collection(db,'viajes'), where('date','>=',range.start), where('date','<=',range.end));
+    const snap=await getDocs(q);
     const rows=[];
     snap.forEach(d=>rows.push(d.data()));
     if(rows.length){
@@ -476,7 +500,7 @@ async function loadViajes(){
       if(window.__setFirebaseBase) window.__setFirebaseBase(rows);
       else window.__pendingViajesData=rows;
     } else {
-      setV('☁️ Sin viajes — sube un CSV','#a8d4b8');
+      setV(range ? '☁️ Sin viajes en el rango' : '☁️ Sin viajes — sube un CSV','#a8d4b8');
     }
   }catch(e){
     setV('⚠️ '+e.message,'#e05555');
@@ -504,10 +528,12 @@ async function saveViajes(newRows){
 }
 
 // ── Scores ────────────────────────────────────────────────────────────────────
-async function loadScores(){
+async function loadScores(range){
   setS('⭐ Score: cargando…','#f5a623');
   try{
-    const snap=await getDocs(collection(db,'scores'));
+    let q = collection(db,'scores');
+    if(range) q = query(collection(db,'scores'), where('date','>=',range.start), where('date','<=',range.end));
+    const snap=await getDocs(q);
     const rows=[];
     snap.forEach(d=>rows.push(d.data()));
     if(rows.length){
@@ -515,7 +541,7 @@ async function loadScores(){
       if(window.__mergeScoreFromFirebase) window.__mergeScoreFromFirebase(rows);
       else window.__pendingScoreData=rows;
     } else {
-      setS('☁️ Sin scores — sube un Excel','#a8d4b8');
+      setS(range ? '☁️ Sin scores en el rango' : '☁️ Sin scores — sube un Excel','#a8d4b8');
     }
   }catch(e){
     setS('⚠️ '+e.message,'#e05555');
@@ -547,8 +573,13 @@ async function saveScores(newRows){
 window.__saveToFirestore      = saveViajes;
 window.__saveScoresToFirestore = saveScores;
 
-// ── Init ─────────────────────────────────────────────────────────────────────
-Promise.all([loadViajes(), loadScores()]);
+// ── Carga combinada por rango (usada por el selector de fechas) ───────────────
+window.__loadRange = async function(range){
+  await Promise.all([loadViajes(range), loadScores(range), loadEvents(range)]);
+};
+
+// ── Init: solo el mes en curso por defecto ─────────────────────────────────────
+Promise.all([loadViajes(getCurrentMonthRange()), loadScores(getCurrentMonthRange())]);
 </script>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
@@ -1188,6 +1219,36 @@ function populateSelects(){
   rSel.innerHTML='<option value="">Todas</option>'+rutas.map(r=>`<option ${r===rVal?'selected':''}>${r}</option>`).join('');
 }
 
+async function loadDateRange(){
+  const from = document.getElementById('rangeFrom').value;
+  const to = document.getElementById('rangeTo').value;
+  const status = document.getElementById('rangeLoadStatus');
+  const btn = document.getElementById('btnLoadRange');
+  if(!from || !to){
+    status.textContent = '⚠️ Selecciona ambas fechas';
+    status.style.color = '#e05555';
+    return;
+  }
+  if(from > to){
+    status.textContent = '⚠️ La fecha inicial debe ser antes de la final';
+    status.style.color = '#e05555';
+    return;
+  }
+  status.textContent = '⏳ Cargando…';
+  status.style.color = '#f5a623';
+  btn.disabled = true;
+  try{
+    if(window.__loadRange) await window.__loadRange({start: from, end: to});
+    status.textContent = `✅ Cargado ${from} a ${to}`;
+    status.style.color = '#5de89a';
+  }catch(e){
+    status.textContent = '⚠️ '+e.message;
+    status.style.color = '#e05555';
+  }finally{
+    btn.disabled = false;
+  }
+}
+
 function showPanel(id,tab){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -1472,9 +1533,11 @@ function exportCSV(){
   a.download=`puntualidad_${new Date().toISOString().slice(0,10)}.csv`;a.click();
 }
 
-// Called by Firebase module when viajes load
+// Called by Firebase module when viajes load (merge — no perder rangos ya cargados)
 window.__setFirebaseBase = function(rows) {
-  baseData = rows;
+  const existingIds = new Set(baseData.map(r=>r.id));
+  const fresh = rows.filter(r=>!existingIds.has(r.id));
+  baseData = baseData.concat(fresh);
   populateSelects();
   applyFilters();
 };
@@ -1508,8 +1571,12 @@ window.__mergeScoreFromFirebase = function(rows) {
     document.getElementById('eventsCountLabel').textContent = `+${eventsData.length} eventos`;
   }
   window.__setEventsData = rows => {
-    eventsData = rows;
+    const key = e => `${e.employeeId}|${e.date}|${e.eventName}`;
+    const existing = new Set(eventsData.map(key));
+    const fresh = rows.filter(e=>!existing.has(key(e)));
+    eventsData = eventsData.concat(fresh);
     document.getElementById('eventsCountLabel').textContent = `+${eventsData.length} eventos`;
+    applyFilters();
   };
 })();
 
